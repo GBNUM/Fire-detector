@@ -32,6 +32,11 @@ def process_image(image):
     for box in boxes:
         draw.rectangle(box[:4], outline='red', width=3)
     return image
+    
+@app.route('/')
+def index():
+    return "Welcome to the Fire Detection API. Use the /detect endpoint to upload images."
+
 
 @app.route('/detect-fire', methods=['POST'])
 def detect_fire():
