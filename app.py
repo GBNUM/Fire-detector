@@ -23,6 +23,7 @@ transform = transforms.Compose([
 ])
 
 def process_image(image):
+    
     image_tensor = transform(image).unsqueeze(0)
     with torch.no_grad():
         output = model(image_tensor)
@@ -44,6 +45,7 @@ def index():
 def detect_fire():
     file = request.files['image']
     img = Image.open(file)
+    img = img.resize((416, 416))  # or another appropriate size
 
     # Process the image and get results
     result_image = process_image(img)
