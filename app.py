@@ -1,61 +1,84 @@
-from flask import Flask, request, send_file
-from PIL import Image, ImageDraw
-import torch
-import io
-from torchvision import transforms
-from ultralytics import YOLO  # Adjust this import based on your YOLO library
+from flask import Flask, jsonify, request
+import firebase_admin
+from firebase_admin import credentials, db
+import base64
+from io import BytesIO
 import cv2
+import numpy as np
+from ultralytics import YOLO
+import math
+import cvzone
 
-
+# Initialize the Flask app
 app = Flask(__name__)
 
-# Load your YOLO model
+# Initialize the Firebase app
+cred = credentials.Certificate('C:\\Users\\micke\\OneDrive\\Desktop\\machinelearning\\FIRE_DETECTION-main\\FIRE_DETECTION-main\\esp32-cam-32ed7-firebase-adminsdk-6wleo-c7ccb4ac98.json')
+firebase_admin.initialize_app(cred, {
+    'databaseURL': 'https://esp32-cam-32ed7-default-rtdb.firebaseio.com/'
+})
+
+# Reference to your database
+
+# Load YOLO model
 model = YOLO('fire.pt')
+classnames = ['fire']
 
-# Define the image transformation
-transform = transforms.Compose([
-    transforms.Resize((416, 416)),  # Resize to your model's input size
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
-
-def process_image(image):
+def predict_image(frame):
+    result = model(frame, stream=True)
+    predictions = []
     
-    image_tensor = transform(image).unsqueeze(0)
-    with torch.no_grad():
-        output = model(image_tensor)
-
-    # Example output processing
-    boxes = [[50, 50, 200, 200]]  # Replace with actual output processing logic
-
-    draw = ImageDraw.Draw(image)
-    for box in boxes:
-        draw.rectangle(box[:4], outline='red', width=3)
-    return image
+    for info in result:
+        boxes = info.boxes
+        for box in boxes:
+            confidence = box.conf[0]
+            confidence = math.ceil(confidence * 100)
+            Class = int(box.cls[0])
+            if confidence > 40:
+                x1, y1, x2, y2 = box.xyxy[0]
+                x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 5)
+                cvzone.putTextRect(frame, f'{classnames[Class]} {confidence}%', [x1 + 8, y1 + 100], scale=1.5, thickness=1)
+                predictions.append({
+                    "class": classnames[Class],
+                    "confidence": confidence,
+                    "box": [x1, y1, x2, y2]
+                })
     
-@app.route('/')
-def index():
-    return "Welcome to the Fire Detection API. Use the /detect endpoint to upload images."
+    return frame, predictions
 
+@app.route('/predict', methods=['GET'])
+def predict():
+    camId = request.args.get('camId')
+    # Retrieve the Base64 image from Firebase
+    ref = db.reference('' + str(camId) + '/photo')
+    base64_image = ref.get()
 
-@app.route('/detect-fire', methods=['POST'])
-def detect_fire():
-    file = request.files['image']
-    img = Image.open(file)
-    img = img.resize((416, 416))  # or another appropriate size
+    if base64_image:
+        # If the Base64 string includes metadata, remove it
+        if base64_image.startswith('data:image/png;base64,'):
+            base64_image = base64_image.split(',')[1]
 
-    # Process the image and get results
-    result_image = process_image(img)
+        # Decode the image and convert it to an OpenCV format
+        image_data = base64.b64decode(base64_image)
+        nparr = np.frombuffer(image_data, np.uint8)
+        frame = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        frame = cv2.resize(frame, (640, 480))  # Resize if necessary
 
-    # Save the result to a buffer
-    img_io = io.BytesIO()
-    result_image.save(img_io, format='JPEG')  # Specify format here
-    img_io.seek(0)
+        # Predict and return results
+        frame, predictions = predict_image(frame)
 
-    return send_file(img_io, mimetype='image/jpeg')
+        # Encode image back to Base64 for response (optional)
+        _, buffer = cv2.imencode('.jpg', frame)
+        encoded_image = base64.b64encode(buffer).decode('utf-8')
+
+        # Return predictions and the image as Base64 (optional)
+        return jsonify({
+            "predictions": predictions,
+            "image": f"data:image/jpeg;base64,{encoded_image}"  # If you want to return the image
+        })
+
+    return jsonify({"error": "No image found in Firebase"}), 404
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=port)
+    app.run(debug=True, port=5000)
