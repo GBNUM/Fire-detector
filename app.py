@@ -7,7 +7,7 @@ import cv2
 import numpy as np
 from ultralytics import YOLO
 import math
-import cvzone
+
 
 # Initialize the Flask app
 app = Flask(__name__)
